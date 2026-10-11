@@ -1,5 +1,7 @@
 import Cocoa
 import WebKit
+import UniformTypeIdentifiers
+import UserNotifications
 
 final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKUIDelegate, NSWindowDelegate {
     var window: NSWindow!
@@ -38,17 +40,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         case "save":
             guard let state=obj["state"], let bytes=try? JSONSerialization.data(withJSONObject:state,options:[.prettyPrinted,.sortedKeys]) else { return }
             do { if FileManager.default.fileExists(atPath:dataURL.path) { let backup=dataDir.appendingPathComponent("tasks.previous.json"); try? FileManager.default.removeItem(at:backup); try? FileManager.default.copyItem(at:dataURL,to:backup) }; try bytes.write(to:dataURL,options:.atomic); send("saved",true) } catch { send("nativeError",error.localizedDescription) }
+        case "checkpoint":
+            let url=dataDir.appendingPathComponent("Backup-"+UUID().uuidString+".json"); if FileManager.default.fileExists(atPath:dataURL.path) { try? FileManager.default.copyItem(at:dataURL,to:url) }
         case "export":
-            let panel=NSSavePanel(); panel.nameFieldStringValue="Mario To Do Backup.json"; panel.allowedFileTypes=["json"]
+            let panel=NSSavePanel(); panel.nameFieldStringValue="Mario To Do Backup.json"; panel.allowedContentTypes=[.json]
             panel.beginSheetModal(for:window) { result in if result == .OK,let url=panel.url,let state=obj["state"],let bytes=try? JSONSerialization.data(withJSONObject:state,options:[.prettyPrinted]) { do { try bytes.write(to:url,options:.atomic); self.send("toast","Backup exported") } catch { self.send("nativeError",error.localizedDescription) } } }
         case "import":
-            let panel=NSOpenPanel(); panel.allowedFileTypes=["json"]; panel.beginSheetModal(for:window) { result in if result == .OK,let url=panel.url { do { let bytes=try Data(contentsOf:url); if bytes.count>20_000_000 { self.send("nativeError","Backup is too large"); return }; let state=try JSONSerialization.jsonObject(with:bytes); self.send("importData",state) } catch { self.send("nativeError",error.localizedDescription) } } }
+            let panel=NSOpenPanel(); panel.allowedContentTypes=[.json]; panel.beginSheetModal(for:window) { result in if result == .OK,let url=panel.url { do { let bytes=try Data(contentsOf:url); if bytes.count>20_000_000 { self.send("nativeError","Backup is too large"); return }; let state=try JSONSerialization.jsonObject(with:bytes); self.send("importData",state) } catch { self.send("nativeError",error.localizedDescription) } } }
         case "attach":
             let panel=NSOpenPanel(); panel.beginSheetModal(for:window) { result in if result == .OK,let url=panel.url,let id=obj["id"] as? String { let name=UUID().uuidString+"-"+url.lastPathComponent; let target=self.dataDir.appendingPathComponent("Attachments").appendingPathComponent(name); do { try FileManager.default.copyItem(at:url,to:target); self.send("attached",["id":id,"name":url.lastPathComponent,"file":name]) } catch { self.send("nativeError",error.localizedDescription) } } }
         case "openAttachment":
             if let file=obj["file"] as? String, !file.contains("/"), !file.contains("..") { NSWorkspace.shared.open(dataDir.appendingPathComponent("Attachments").appendingPathComponent(file)) }
         case "notify":
-            let note=NSUserNotification(); note.title="Mario To Do"; note.informativeText=obj["title"] as? String; NSUserNotificationCenter.default.deliver(note)
+            let center=UNUserNotificationCenter.current(); center.requestAuthorization(options:[.alert,.sound]) { allowed,error in if allowed { let note=UNMutableNotificationContent();note.title="Mario To Do";note.body=obj["title"] as? String ?? "Task reminder";note.sound = .default;center.add(UNNotificationRequest(identifier:UUID().uuidString,content:note,trigger:nil)) } }
         case "print": web.printOperation(with:NSPrintInfo.shared).run()
         default: break
         }
